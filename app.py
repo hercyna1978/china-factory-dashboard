@@ -1,18 +1,22 @@
 import os
+from pathlib import Path
+
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+
 # =========================================================
-# 설정
+# 페이지 설정
 # =========================================================
 st.set_page_config(
     page_title="중국공장 물류 운영 대시보드",
-    page_icon="📊",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 
 FILE_NAME = "data(2).xlsx"
+
 SHEETS = {
     "master": "01_상품Master",
     "snapshot": "02_재고스냅샷",
@@ -21,102 +25,457 @@ SHEETS = {
     "defect": "05_불량관리",
     "current": "08_현재고",
 }
+
 FACTORIES = ["C2", "C5", "C2-S", "미상"]
 
-st.markdown("""
+CHART_COLORS = [
+    "#2563EB",
+    "#06B6D4",
+    "#10B981",
+    "#F59E0B",
+    "#8B5CF6",
+    "#EF4444",
+    "#EC4899",
+    "#64748B",
+]
+
+try:
+    THEME_TYPE = st.context.theme.type
+except Exception:
+    THEME_TYPE = "light"
+
+PLOTLY_TEMPLATE = "plotly_dark" if THEME_TYPE == "dark" else "plotly_white"
+
+
+# =========================================================
+# 화면 디자인
+# =========================================================
+st.markdown(
+    """
 <style>
-.block-container {padding-top: 1.4rem; padding-bottom: 2rem;}
-[data-testid="stMetric"] {
-    border: 1px solid rgba(128,128,128,.22);
+.block-container {
+    padding-top: 1.1rem;
+    padding-bottom: 2rem;
+    max-width: 1600px;
+}
+
+[data-testid="stSidebar"] {
+    border-right: 1px solid var(--secondary-background-color);
+}
+
+[data-testid="stSidebar"] > div:first-child {
+    padding-top: 1rem;
+}
+
+.dashboard-header {
+    padding: 22px 26px;
+    margin-bottom: 18px;
+    border-radius: 18px;
+    border: 1px solid var(--secondary-background-color);
+    background:
+        linear-gradient(
+            135deg,
+            rgba(37, 99, 235, 0.16),
+            rgba(6, 182, 212, 0.08)
+        ),
+        var(--background-color);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.08);
+}
+
+.dashboard-title {
+    font-size: 2rem;
+    line-height: 1.15;
+    font-weight: 850;
+    letter-spacing: -0.04em;
+    margin: 0;
+}
+
+.dashboard-subtitle {
+    margin-top: 7px;
+    font-size: 0.93rem;
+    opacity: 0.68;
+}
+
+.section-title {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin: 22px 0 10px 0;
+    font-size: 1.12rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+}
+
+.section-title::before {
+    content: "";
+    display: inline-block;
+    width: 5px;
+    height: 21px;
+    border-radius: 5px;
+    background: linear-gradient(180deg, #2563EB, #06B6D4);
+}
+
+.kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 12px;
+    margin: 10px 0 16px 0;
+}
+
+.kpi-card {
+    position: relative;
+    overflow: hidden;
+    min-height: 108px;
+    padding: 16px 17px;
+    border-radius: 16px;
+    border: 1px solid var(--secondary-background-color);
+    background: var(--secondary-background-color);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+}
+
+.kpi-card::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 4px;
+    background: var(--kpi-color);
+}
+
+.kpi-label {
+    font-size: 0.82rem;
+    font-weight: 700;
+    opacity: 0.68;
+}
+
+.kpi-value {
+    margin-top: 9px;
+    font-size: 1.65rem;
+    line-height: 1.1;
+    font-weight: 850;
+    letter-spacing: -0.035em;
+}
+
+.info-card {
+    border: 1px solid var(--secondary-background-color);
+    border-radius: 14px;
+    padding: 14px 16px;
+    background: var(--secondary-background-color);
+    margin-bottom: 14px;
+}
+
+.danger-card {
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    border-radius: 14px;
+    padding: 14px 16px;
+    background: rgba(239, 68, 68, 0.08);
+    margin-bottom: 14px;
+}
+
+div[data-testid="stDataFrame"] {
     border-radius: 12px;
-    padding: 12px 16px;
-    background: rgba(128,128,128,.04);
+    overflow: hidden;
+}
+
+[data-testid="stMetric"] {
+    border-radius: 14px;
+    border: 1px solid var(--secondary-background-color);
+    background: var(--secondary-background-color);
+    padding: 13px 15px;
+}
+
+@media (max-width: 1100px) {
+    .kpi-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 700px) {
+    .kpi-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
 }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 
 # =========================================================
 # 기본 함수
 # =========================================================
-def code(x):
-    if pd.isna(x):
+def code(value):
+    if pd.isna(value):
         return ""
-    s = str(x).strip().upper()
-    return s[:-2] if s.endswith(".0") else s
+    value = str(value).strip().upper()
+    if value.endswith(".0"):
+        value = value[:-2]
+    return value
 
 
-def factory(x):
+def classify_factory(value):
     """
-    Master의 공급처상품명으로 공장 분류.
-    C2-S를 먼저 검사하는 이유: C2-S 안에 C2가 포함되어 있기 때문.
+    상품Master의 공급처상품명을 기준으로 공장 분류.
+    C2-S가 C2보다 먼저 검사되어야 한다.
     """
-    if pd.isna(x):
+    if pd.isna(value):
         return "미상"
-    s = str(x).strip().upper().replace(" ", "")
-    if not s or s in {"NAN", "NONE", "0"}:
+
+    value = str(value).strip().upper().replace(" ", "")
+
+    if not value or value in {"NAN", "NONE", "0"}:
         return "미상"
-    if "C2-S" in s:
+
+    if "C2-S" in value:
         return "C2-S"
-    if "C2" in s:
+    if "C2" in value:
         return "C2"
-    if "C5" in s:
+    if "C5" in value:
         return "C5"
+
     return "미상"
 
 
-def num(x):
-    return f"{x:,.0f}"
+def classify_defect(value):
+    """
+    불량유형 통합 분류 기준
+    테라 포함 -> 테불량
+    렌즈 포함 -> 렌즈불량
+    전체 포함 -> 전체 불량
+    그 외 -> 분류어려움
+    """
+    if pd.isna(value):
+        return "분류어려움"
+
+    value = str(value).strip()
+
+    if "테라" in value:
+        return "테불량"
+    if "렌즈" in value:
+        return "렌즈불량"
+    if "전체" in value:
+        return "전체 불량"
+
+    return "분류어려움"
 
 
-def pct(x):
-    return "-" if pd.isna(x) else f"{x:.1f}%"
+def num(value):
+    return f"{float(value):,.0f}"
 
 
-def filter_df(df, fac, cat):
-    out = df
-    if fac != "전체":
-        out = out[out["공장"] == fac]
-    if cat != "전체":
-        out = out[out["카테고리"] == cat]
-    return out
+def pct(value):
+    return "-" if pd.isna(value) else f"{float(value):.1f}%"
+
+
+def filter_df(df, factory, category):
+    result = df
+
+    if factory != "전체":
+        result = result[result["공장"] == factory]
+
+    if category != "전체":
+        result = result[result["카테고리"] == category]
+
+    return result
+
+
+def section(title):
+    st.markdown(
+        f'<div class="section-title">{title}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def kpi_cards(items):
+    cards = []
+
+    for label, value, color in items:
+        cards.append(
+            f"""
+            <div class="kpi-card" style="--kpi-color:{color};">
+                <div class="kpi-label">{label}</div>
+                <div class="kpi-value">{value}</div>
+            </div>
+            """
+        )
+
+    st.markdown(
+        '<div class="kpi-grid">' + "".join(cards) + "</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def chart_bar(df, x, y, title, horizontal=False):
+    if df.empty:
+        st.info("조회할 데이터가 없습니다.")
+        return
+
+    work = df.copy()
+
     if horizontal:
-        fig = px.bar(df.sort_values(y), x=y, y=x, orientation="h",
-                     title=title, text=y)
+        work = work.sort_values(y)
+
+        fig = px.bar(
+            work,
+            x=y,
+            y=x,
+            orientation="h",
+            title=title,
+            text=y,
+            color_discrete_sequence=CHART_COLORS,
+        )
     else:
-        fig = px.bar(df, x=x, y=y, title=title, text=y)
-    fig.update_traces(texttemplate="%{text:,.0f}", textposition="outside")
-    fig.update_layout(
-        height=390,
-        margin=dict(l=20, r=20, t=60, b=20),
-        xaxis_title=None,
-        yaxis_title="수량" if not horizontal else None,
+        fig = px.bar(
+            work,
+            x=x,
+            y=y,
+            title=title,
+            text=y,
+            color_discrete_sequence=CHART_COLORS,
+        )
+
+    fig.update_traces(
+        texttemplate="%{text:,.0f}",
+        textposition="outside",
+        cliponaxis=False,
     )
-    st.plotly_chart(fig, use_container_width=True)
+
+    fig.update_layout(
+        template=PLOTLY_TEMPLATE,
+        height=390,
+        margin=dict(l=25, r=25, t=60, b=30),
+        xaxis_title=None,
+        yaxis_title=None,
+        showlegend=False,
+        hovermode="x unified",
+    )
+
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        config={"displayModeBar": False},
+    )
 
 
 def add_master_info(df, maps):
-    out = df.copy()
-    out["_상품코드"] = out["상품코드"].map(code)
-    out["공장"] = out["_상품코드"].map(maps["factory"]).fillna("미상")
-    out["상품명_Master"] = out["_상품코드"].map(maps["name"]).fillna(out["상품명"])
-    out["카테고리"] = out["_상품코드"].map(maps["category"]).fillna("미상")
-    out["판매상태"] = out["_상품코드"].map(maps["status"]).fillna("미상")
-    return out
+    result = df.copy()
+
+    result["_상품코드"] = result["상품코드"].map(code)
+    result["공장"] = (
+        result["_상품코드"].map(maps["factory"]).fillna("미상")
+    )
+    result["상품명_Master"] = (
+        result["_상품코드"].map(maps["name"]).fillna(result["상품명"])
+    )
+    result["카테고리"] = (
+        result["_상품코드"].map(maps["category"]).fillna("미상")
+    )
+    result["판매상태"] = (
+        result["_상품코드"].map(maps["status"]).fillna("미상")
+    )
+
+    return result
+
+
+def monthly(df, date_col, qty_col, result_name):
+    result = df.dropna(subset=[date_col]).copy()
+
+    if result.empty:
+        return pd.DataFrame(columns=["월", result_name])
+
+    result["월"] = result[date_col].dt.to_period("M").astype(str)
+
+    return (
+        result.groupby("월", as_index=False)[qty_col]
+        .sum()
+        .rename(columns={qty_col: result_name})
+        .sort_values("월")
+    )
+
+
+def factory_kpi(data):
+    rows = []
+
+    for factory_name in FACTORIES:
+        master_df = data["master"][
+            data["master"]["공장"] == factory_name
+        ]
+        current_df = data["current"][
+            data["current"]["공장"] == factory_name
+        ]
+        inbound_df = data["inbound"][
+            data["inbound"]["공장"] == factory_name
+        ]
+        outbound_df = data["outbound"][
+            data["outbound"]["공장"] == factory_name
+        ]
+        defect_df = data["defect"][
+            data["defect"]["공장"] == factory_name
+        ]
+
+        outbound_qty = outbound_df["출고수량"].sum()
+        defect_qty = defect_df["불량수량"].sum()
+
+        rows.append(
+            {
+                "공장": factory_name,
+                "SKU": master_df["_상품코드"].nunique(),
+                "현재고": current_df["현재고수량"].sum(),
+                "입고": inbound_df["입고수량"].sum(),
+                "출고": outbound_qty,
+                "불량": defect_qty,
+                "불량률": (
+                    defect_qty / outbound_qty * 100
+                    if outbound_qty
+                    else 0
+                ),
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def styled_numbers(df, integer_columns=None, percent_columns=None):
+    result = df.copy()
+
+    integer_columns = integer_columns or []
+    percent_columns = percent_columns or []
+
+    for column in integer_columns:
+        if column in result.columns:
+            result[column] = pd.to_numeric(
+                result[column], errors="coerce"
+            ).map(
+                lambda x: f"{x:,.0f}" if pd.notna(x) else "-"
+            )
+
+    for column in percent_columns:
+        if column in result.columns:
+            result[column] = pd.to_numeric(
+                result[column], errors="coerce"
+            ).map(
+                lambda x: f"{x:.1f}%" if pd.notna(x) else "-"
+            )
+
+    return result
 
 
 # =========================================================
-# 데이터 읽기
+# 엑셀 읽기
 # =========================================================
-@st.cache_data(show_spinner=False)
-def read_excel(source_path):
-    excel = pd.ExcelFile(source_path)
-    missing = [v for v in SHEETS.values() if v not in excel.sheet_names]
-    if missing:
-        raise ValueError("필수 시트가 없습니다: " + ", ".join(missing))
+def read_excel(source):
+    excel = pd.ExcelFile(source)
+
+    missing_sheets = [
+        sheet for sheet in SHEETS.values()
+        if sheet not in excel.sheet_names
+    ]
+
+    if missing_sheets:
+        raise ValueError(
+            "필수 시트가 없습니다: " + ", ".join(missing_sheets)
+        )
 
     master = pd.read_excel(excel, SHEETS["master"])
     snapshot = pd.read_excel(excel, SHEETS["snapshot"])
@@ -125,45 +484,111 @@ def read_excel(source_path):
     defect = pd.read_excel(excel, SHEETS["defect"])
     current = pd.read_excel(excel, SHEETS["current"])
 
-    required = {
-        "상품Master": ["상품코드", "상품명", "카테고리", "출시일", "판매상태", "공급처상품명"],
-        "재고스냅샷": ["기준일", "상품코드", "상품명", "현재고수량"],
-        "입고": ["입고일", "상품코드", "상품명", "입고수량", "중국공장"],
-        "출고": ["출고일", "상품코드", "상품명", "출고수량", "판매채널"],
-        "불량관리": ["발생일", "상품코드", "상품명", "불량수량", "불량유형", "중국공장"],
-        "현재고": ["기준일", "상품코드", "상품명", "현재고수량"],
+    required_columns = {
+        "상품Master": [
+            "상품코드", "상품명", "카테고리",
+            "출시일", "판매상태", "공급처상품명"
+        ],
+        "재고스냅샷": [
+            "기준일", "상품코드", "상품명", "현재고수량"
+        ],
+        "입고": [
+            "입고일", "상품코드", "상품명",
+            "입고수량", "중국공장"
+        ],
+        "출고": [
+            "출고일", "상품코드", "상품명",
+            "출고수량", "판매채널"
+        ],
+        "불량관리": [
+            "발생일", "상품코드", "상품명",
+            "불량수량", "불량유형", "중국공장"
+        ],
+        "현재고": [
+            "기준일", "상품코드", "상품명", "현재고수량"
+        ],
     }
+
     loaded = {
-        "상품Master": master, "재고스냅샷": snapshot, "입고": inbound,
-        "출고": outbound, "불량관리": defect, "현재고": current,
+        "상품Master": master,
+        "재고스냅샷": snapshot,
+        "입고": inbound,
+        "출고": outbound,
+        "불량관리": defect,
+        "현재고": current,
     }
-    for name, cols in required.items():
-        missing_cols = [c for c in cols if c not in loaded[name].columns]
-        if missing_cols:
-            raise ValueError(f"{name} 시트에 열이 없습니다: {', '.join(missing_cols)}")
 
-    # 날짜/숫자
-    for df, col in [
-        (master, "출시일"), (snapshot, "기준일"), (inbound, "입고일"),
-        (outbound, "출고일"), (defect, "발생일"), (current, "기준일")
-    ]:
-        df[col] = pd.to_datetime(df[col], errors="coerce")
+    for sheet_name, columns in required_columns.items():
+        missing_columns = [
+            column
+            for column in columns
+            if column not in loaded[sheet_name].columns
+        ]
 
-    for df, col in [
-        (snapshot, "현재고수량"), (inbound, "입고수량"),
-        (outbound, "출고수량"), (defect, "불량수량"), (current, "현재고수량")
-    ]:
-        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+        if missing_columns:
+            raise ValueError(
+                f"{sheet_name} 시트에 열이 없습니다: "
+                + ", ".join(missing_columns)
+            )
 
-    # 상품Master 기준 공장
+    date_columns = [
+        (master, "출시일"),
+        (snapshot, "기준일"),
+        (inbound, "입고일"),
+        (outbound, "출고일"),
+        (defect, "발생일"),
+        (current, "기준일"),
+    ]
+
+    for df, column in date_columns:
+        df[column] = pd.to_datetime(
+            df[column],
+            errors="coerce",
+        )
+
+    numeric_columns = [
+        (snapshot, "현재고수량"),
+        (inbound, "입고수량"),
+        (outbound, "출고수량"),
+        (defect, "불량수량"),
+        (current, "현재고수량"),
+    ]
+
+    for df, column in numeric_columns:
+        df[column] = pd.to_numeric(
+            df[column],
+            errors="coerce",
+        ).fillna(0)
+
+    # -----------------------------------------------------
+    # 상품Master 기준 공장 분류
+    # -----------------------------------------------------
     master["_상품코드"] = master["상품코드"].map(code)
-    master["공장"] = master["공급처상품명"].apply(factory)
+    master["공장"] = master["공급처상품명"].apply(
+        classify_factory
+    )
+
+    master_unique = master.drop_duplicates(
+        "_상품코드",
+        keep="first",
+    )
 
     maps = {
-        "factory": master.drop_duplicates("_상품코드").set_index("_상품코드")["공장"].to_dict(),
-        "name": master.drop_duplicates("_상품코드").set_index("_상품코드")["상품명"].to_dict(),
-        "category": master.drop_duplicates("_상품코드").set_index("_상품코드")["카테고리"].to_dict(),
-        "status": master.drop_duplicates("_상품코드").set_index("_상품코드")["판매상태"].to_dict(),
+        "factory": master_unique.set_index(
+            "_상품코드"
+        )["공장"].to_dict(),
+
+        "name": master_unique.set_index(
+            "_상품코드"
+        )["상품명"].to_dict(),
+
+        "category": master_unique.set_index(
+            "_상품코드"
+        )["카테고리"].to_dict(),
+
+        "status": master_unique.set_index(
+            "_상품코드"
+        )["판매상태"].to_dict(),
     }
 
     snapshot = add_master_info(snapshot, maps)
@@ -172,368 +597,912 @@ def read_excel(source_path):
     defect = add_master_info(defect, maps)
     current = add_master_info(current, maps)
 
-    # 현재고는 최신 기준일만 사용
+    # -----------------------------------------------------
+    # 불량유형 통합 분류
+    # -----------------------------------------------------
+    defect["불량유형_통합"] = defect["불량유형"].apply(
+        classify_defect
+    )
+
+    # -----------------------------------------------------
+    # 현재고는 최신 기준일 데이터만 사용
+    # -----------------------------------------------------
     if current["기준일"].notna().any():
         latest_current = current["기준일"].max()
-        current = current[current["기준일"] == latest_current].copy()
+        current = current[
+            current["기준일"] == latest_current
+        ].copy()
     else:
         latest_current = pd.NaT
 
     return {
-        "master": master, "snapshot": snapshot, "inbound": inbound,
-        "outbound": outbound, "defect": defect, "current": current,
+        "master": master,
+        "snapshot": snapshot,
+        "inbound": inbound,
+        "outbound": outbound,
+        "defect": defect,
+        "current": current,
         "latest_current": latest_current,
     }
 
 
-def monthly(df, date_col, qty_col, label):
-    x = df.dropna(subset=[date_col]).copy()
-    if x.empty:
-        return pd.DataFrame(columns=["월", label])
-    x["월"] = x[date_col].dt.to_period("M").astype(str)
-    return x.groupby("월", as_index=False)[qty_col].sum().rename(columns={qty_col: label})
-
-
-def factory_kpi(data):
-    rows = []
-    for f in FACTORIES:
-        m = data["master"][data["master"]["공장"] == f]
-        c = data["current"][data["current"]["공장"] == f]
-        i = data["inbound"][data["inbound"]["공장"] == f]
-        o = data["outbound"][data["outbound"]["공장"] == f]
-        d = data["defect"][data["defect"]["공장"] == f]
-
-        out_qty = o["출고수량"].sum()
-        defect_qty = d["불량수량"].sum()
-
-        rows.append({
-            "공장": f,
-            "SKU": m["_상품코드"].nunique(),
-            "현재고": c["현재고수량"].sum(),
-            "입고": i["입고수량"].sum(),
-            "출고": out_qty,
-            "불량": defect_qty,
-            "불량률": defect_qty / out_qty * 100 if out_qty else 0,
-        })
-    return pd.DataFrame(rows)
-
-
 # =========================================================
-# 파일 선택
+# 데이터 준비
 # =========================================================
 with st.sidebar:
-    st.markdown("### 데이터")
-    uploaded = st.file_uploader("Excel 파일 선택", type=["xlsx"])
+    st.markdown("## 데이터")
+    uploaded_file = st.file_uploader(
+        "Excel 파일 선택",
+        type=["xlsx"],
+    )
 
-if uploaded:
-    try:
-        # 업로드 파일은 현재 세션에서만 사용
-        data = read_excel(uploaded)
-        source_name = uploaded.name
-    except Exception as e:
-        st.error(str(e))
-        st.stop()
+if uploaded_file is not None:
+    source = uploaded_file
+    source_name = uploaded_file.name
 else:
     if not os.path.exists(FILE_NAME):
-        st.error(f"'{FILE_NAME}' 파일이 없습니다. app.py와 같은 폴더에 넣어주세요.")
-        st.stop()
-    try:
-        # 파일 수정시간이 바뀌면 cache도 새로 계산
-        data = read_excel(FILE_NAME)
-        source_name = FILE_NAME
-    except Exception as e:
-        st.error(str(e))
+        st.error(
+            f"{FILE_NAME} 파일이 app.py와 같은 폴더에 없습니다."
+        )
         st.stop()
 
+    source = FILE_NAME
+    source_name = FILE_NAME
+
+try:
+    data = read_excel(source)
+except Exception as error:
+    st.error("데이터를 읽는 중 오류가 발생했습니다.")
+    st.code(str(error))
+    st.stop()
 
 master = data["master"]
-current = data["current"]
+snapshot = data["snapshot"]
 inbound = data["inbound"]
 outbound = data["outbound"]
 defect = data["defect"]
-snapshot = data["snapshot"]
+current = data["current"]
 
 
 # =========================================================
-# 사이드바
+# 사이드바 필터
 # =========================================================
 with st.sidebar:
     st.markdown("---")
-    st.markdown("### 조회")
+    st.markdown("## 조회")
 
     page = st.radio(
         "화면",
-        ["경영진 요약", "공장별 운영", "재고 현황", "입출고 추이", "품질 현황", "데이터 품질"],
+        [
+            "경영진 요약",
+            "공장별 운영",
+            "재고 현황",
+            "입출고 추이",
+            "품질 현황",
+            "데이터 품질",
+        ],
         label_visibility="collapsed",
     )
 
-    selected_factory = st.selectbox("공장", ["전체"] + FACTORIES)
+    selected_factory = st.selectbox(
+        "공장",
+        ["전체"] + FACTORIES,
+    )
 
-    categories = sorted(master["카테고리"].dropna().astype(str).unique())
-    selected_category = st.selectbox("카테고리", ["전체"] + categories)
+    category_values = sorted(
+        master["카테고리"]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
+    selected_category = st.selectbox(
+        "카테고리",
+        ["전체"] + category_values,
+    )
 
     st.markdown("---")
-    st.caption(f"데이터: {source_name}")
+    st.markdown("## 데이터 기준")
+
     if pd.notna(data["latest_current"]):
-        st.caption(f"현재고 기준일: {data['latest_current'].strftime('%Y-%m-%d')}")
+        st.caption(
+            "현재고 기준일: "
+            + data["latest_current"].strftime("%Y-%m-%d")
+        )
 
-    dates = pd.concat([inbound["입고일"], outbound["출고일"], defect["발생일"]]).dropna()
-    if not dates.empty:
-        st.caption(f"거래기간: {dates.min():%Y-%m-%d} ~ {dates.max():%Y-%m-%d}")
+    transaction_dates = pd.concat(
+        [
+            inbound["입고일"],
+            outbound["출고일"],
+            defect["발생일"],
+        ],
+        ignore_index=True,
+    ).dropna()
+
+    if not transaction_dates.empty:
+        st.caption(
+            "거래기간: "
+            + transaction_dates.min().strftime("%Y-%m-%d")
+            + " ~ "
+            + transaction_dates.max().strftime("%Y-%m-%d")
+        )
+
+    st.caption("파일: " + source_name)
 
 
 # =========================================================
-# 제목
+# 공통 헤더
 # =========================================================
-st.title("중국공장 물류 운영 대시보드")
-st.caption("공장 구분은 상품Master의 '공급처상품명'을 기준으로 자동 분류합니다.")
+st.markdown(
+    """
+    <div class="dashboard-header">
+        <div class="dashboard-title">중국공장 물류 운영 대시보드</div>
+        <div class="dashboard-subtitle">
+            상품Master 기준 공장 분류 · 재고 · 입출고 · 품질 통합 현황
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 # =========================================================
 # 1. 경영진 요약
 # =========================================================
 if page == "경영진 요약":
-    m = filter_df(master, selected_factory, selected_category)
-    c = filter_df(current, selected_factory, selected_category)
-    i = filter_df(inbound, selected_factory, selected_category)
-    o = filter_df(outbound, selected_factory, selected_category)
-    d = filter_df(defect, selected_factory, selected_category)
+    master_f = filter_df(
+        master,
+        selected_factory,
+        selected_category,
+    )
+    current_f = filter_df(
+        current,
+        selected_factory,
+        selected_category,
+    )
+    inbound_f = filter_df(
+        inbound,
+        selected_factory,
+        selected_category,
+    )
+    outbound_f = filter_df(
+        outbound,
+        selected_factory,
+        selected_category,
+    )
+    defect_f = filter_df(
+        defect,
+        selected_factory,
+        selected_category,
+    )
 
-    sku = m["_상품코드"].nunique()
-    stock = c["현재고수량"].sum()
-    in_qty = i["입고수량"].sum()
-    out_qty = o["출고수량"].sum()
-    defect_qty = d["불량수량"].sum()
-    defect_rate = defect_qty / out_qty * 100 if out_qty else 0
+    sku = master_f["_상품코드"].nunique()
+    stock = current_f["현재고수량"].sum()
+    inbound_qty = inbound_f["입고수량"].sum()
+    outbound_qty = outbound_f["출고수량"].sum()
+    defect_qty = defect_f["불량수량"].sum()
 
-    cols = st.columns(6)
-    for col, title, value in [
-        (cols[0], "SKU", num(sku)),
-        (cols[1], "현재고", num(stock)),
-        (cols[2], "누적 입고", num(in_qty)),
-        (cols[3], "누적 출고", num(out_qty)),
-        (cols[4], "불량 수량", num(defect_qty)),
-        (cols[5], "불량률", pct(defect_rate)),
-    ]:
-        col.metric(title, value)
+    defect_rate = (
+        defect_qty / outbound_qty * 100
+        if outbound_qty
+        else 0
+    )
 
-    st.markdown("### 공장별 핵심 현황")
+    kpi_cards(
+        [
+            ("SKU", num(sku), "#2563EB"),
+            ("현재고", num(stock), "#06B6D4"),
+            ("누적 입고", num(inbound_qty), "#10B981"),
+            ("누적 출고", num(outbound_qty), "#F59E0B"),
+            ("불량 수량", num(defect_qty), "#EF4444"),
+            ("불량률", pct(defect_rate), "#8B5CF6"),
+        ]
+    )
+
+    section("공장별 핵심 현황")
+
     kpi = factory_kpi(data)
+
     if selected_factory != "전체":
-        kpi = kpi[kpi["공장"] == selected_factory]
+        kpi = kpi[
+            kpi["공장"] == selected_factory
+        ]
 
-    a, b = st.columns(2)
-    with a:
-        chart_bar(kpi, "공장", "현재고", "공장별 현재고")
-    with b:
-        chart_bar(kpi, "공장", "출고", "공장별 출고")
+    left, right = st.columns(2)
 
-    table = kpi.copy()
-    for col in ["SKU", "현재고", "입고", "출고", "불량"]:
-        table[col] = table[col].map(num)
-    table["불량률"] = table["불량률"].map(pct)
+    with left:
+        chart_bar(
+            kpi,
+            "공장",
+            "현재고",
+            "공장별 현재고",
+        )
 
-    st.markdown("### 공장별 KPI")
-    st.dataframe(table, use_container_width=True, hide_index=True)
+    with right:
+        chart_bar(
+            kpi,
+            "공장",
+            "출고",
+            "공장별 출고",
+        )
+
+    section("공장별 KPI")
+
+    display = styled_numbers(
+        kpi,
+        integer_columns=[
+            "SKU",
+            "현재고",
+            "입고",
+            "출고",
+            "불량",
+        ],
+        percent_columns=["불량률"],
+    )
+
+    st.dataframe(
+        display,
+        use_container_width=True,
+        hide_index=True,
+    )
 
 
 # =========================================================
 # 2. 공장별 운영
 # =========================================================
 elif page == "공장별 운영":
-    st.subheader("공장별 운영 실적")
+    section("공장별 운영 실적")
+
     kpi = factory_kpi(data)
+
     if selected_factory != "전체":
-        kpi = kpi[kpi["공장"] == selected_factory]
+        kpi = kpi[
+            kpi["공장"] == selected_factory
+        ]
 
-    f = filter_df(inbound, selected_factory, selected_category)
-    g = filter_df(outbound, selected_factory, selected_category)
-    h = filter_df(current, selected_factory, selected_category)
-    q = filter_df(defect, selected_factory, selected_category)
-
-    cols = st.columns(4)
-    cols[0].metric("입고", num(f["입고수량"].sum()))
-    cols[1].metric("출고", num(g["출고수량"].sum()))
-    cols[2].metric("현재고", num(h["현재고수량"].sum()))
-    cols[3].metric("불량", num(q["불량수량"].sum()))
-
-    for y, title in [("입고", "공장별 입고"), ("출고", "공장별 출고"), ("불량", "공장별 불량")]:
-        chart_bar(kpi, "공장", y, title)
-
-    sku = (
-        master.groupby("공장")["_상품코드"].nunique()
-        .reindex(FACTORIES, fill_value=0)
-        .reset_index(name="SKU")
+    inbound_f = filter_df(
+        inbound,
+        selected_factory,
+        selected_category,
     )
-    if selected_factory != "전체":
-        sku = sku[sku["공장"] == selected_factory]
-    chart_bar(sku, "공장", "SKU", "공장별 SKU 수")
+    outbound_f = filter_df(
+        outbound,
+        selected_factory,
+        selected_category,
+    )
+    current_f = filter_df(
+        current,
+        selected_factory,
+        selected_category,
+    )
+    defect_f = filter_df(
+        defect,
+        selected_factory,
+        selected_category,
+    )
+
+    kpi_cards(
+        [
+            ("입고", num(inbound_f["입고수량"].sum()), "#10B981"),
+            ("출고", num(outbound_f["출고수량"].sum()), "#F59E0B"),
+            ("현재고", num(current_f["현재고수량"].sum()), "#06B6D4"),
+            ("불량", num(defect_f["불량수량"].sum()), "#EF4444"),
+        ]
+    )
+
+    left, right = st.columns(2)
+
+    with left:
+        chart_bar(
+            kpi,
+            "공장",
+            "입고",
+            "공장별 입고",
+        )
+
+    with right:
+        chart_bar(
+            kpi,
+            "공장",
+            "출고",
+            "공장별 출고",
+        )
+
+    left, right = st.columns(2)
+
+    with left:
+        chart_bar(
+            kpi,
+            "공장",
+            "불량",
+            "공장별 불량",
+        )
+
+    with right:
+        sku_by_factory = (
+            master.groupby("공장")["_상품코드"]
+            .nunique()
+            .reindex(FACTORIES, fill_value=0)
+            .reset_index(name="SKU")
+        )
+
+        if selected_factory != "전체":
+            sku_by_factory = sku_by_factory[
+                sku_by_factory["공장"] == selected_factory
+            ]
+
+        chart_bar(
+            sku_by_factory,
+            "공장",
+            "SKU",
+            "공장별 SKU",
+        )
+
+    section("공장별 KPI 상세")
+
+    display = styled_numbers(
+        kpi,
+        integer_columns=[
+            "SKU",
+            "현재고",
+            "입고",
+            "출고",
+            "불량",
+        ],
+        percent_columns=["불량률"],
+    )
+
+    st.dataframe(
+        display,
+        use_container_width=True,
+        hide_index=True,
+    )
 
 
 # =========================================================
 # 3. 재고 현황
 # =========================================================
 elif page == "재고 현황":
-    st.subheader("현재 재고 현황")
-    df = filter_df(current, selected_factory, selected_category)
+    section("현재 재고 현황")
 
-    cols = st.columns(4)
-    cols[0].metric("현재고", num(df["현재고수량"].sum()))
-    cols[1].metric("재고 보유 수량", num(df.loc[df["현재고수량"] > 0, "현재고수량"].sum()))
-    cols[2].metric("재고 0 SKU", num((df["현재고수량"] == 0).sum()))
-    cols[3].metric("마이너스 재고 SKU", num((df["현재고수량"] < 0).sum()))
+    current_f = filter_df(
+        current,
+        selected_factory,
+        selected_category,
+    )
 
-    stock = df.groupby("공장", as_index=False)["현재고수량"].sum().rename(columns={"현재고수량": "현재고"})
-    chart_bar(stock, "공장", "현재고", "공장별 현재고")
+    total_stock = current_f["현재고수량"].sum()
+    positive_stock = current_f.loc[
+        current_f["현재고수량"] > 0,
+        "현재고수량",
+    ].sum()
+    zero_sku = (
+        current_f["현재고수량"] == 0
+    ).sum()
+    negative_sku = (
+        current_f["현재고수량"] < 0
+    ).sum()
+
+    kpi_cards(
+        [
+            ("현재고", num(total_stock), "#2563EB"),
+            ("재고 보유 수량", num(positive_stock), "#10B981"),
+            ("재고 0 SKU", num(zero_sku), "#F59E0B"),
+            ("마이너스 재고 SKU", num(negative_sku), "#EF4444"),
+        ]
+    )
+
+    stock_by_factory = (
+        current_f.groupby(
+            "공장",
+            as_index=False,
+        )["현재고수량"]
+        .sum()
+        .rename(
+            columns={"현재고수량": "현재고"}
+        )
+    )
+
+    chart_bar(
+        stock_by_factory,
+        "공장",
+        "현재고",
+        "공장별 현재고",
+    )
+
+    section("현재고 상위 20 SKU")
 
     top = (
-        df.groupby(["_상품코드", "상품명_Master", "공장", "카테고리"], as_index=False)["현재고수량"]
+        current_f.groupby(
+            [
+                "_상품코드",
+                "상품명_Master",
+                "공장",
+                "카테고리",
+            ],
+            as_index=False,
+        )["현재고수량"]
         .sum()
-        .sort_values("현재고수량", ascending=False)
+        .sort_values(
+            "현재고수량",
+            ascending=False,
+        )
         .head(20)
-        .rename(columns={"_상품코드": "상품코드", "상품명_Master": "상품명", "현재고수량": "현재고"})
+        .rename(
+            columns={
+                "_상품코드": "상품코드",
+                "상품명_Master": "상품명",
+                "현재고수량": "현재고",
+            }
+        )
     )
+
     top["현재고"] = top["현재고"].map(num)
 
-    st.markdown("### 현재고 상위 20 SKU")
-    st.dataframe(top, use_container_width=True, hide_index=True)
-
-    negative = (
-        df[df["현재고수량"] < 0]
-        .sort_values("현재고수량")
-        ["_상품코드", "상품명_Master", "공장", "카테고리", "판매상태", "현재고수량"]
-        .rename(columns={"_상품코드": "상품코드", "상품명_Master": "상품명", "현재고수량": "현재고"})
+    st.dataframe(
+        top,
+        use_container_width=True,
+        hide_index=True,
     )
-    negative["현재고"] = negative["현재고"].map(num)
 
-    st.markdown("### 마이너스 재고 SKU")
-    st.dataframe(negative, use_container_width=True, hide_index=True)
+    section("마이너스 재고 SKU")
+
+    # 중요: 여러 컬럼 선택은 반드시 이중 대괄호를 사용한다.
+    # 기존 오류의 원인이었던 df["a", "b"] 형태를 제거했다.
+    negative = (
+        current_f[
+            current_f["현재고수량"] < 0
+        ]
+        .sort_values("현재고수량")
+        [
+            [
+                "_상품코드",
+                "상품명_Master",
+                "공장",
+                "카테고리",
+                "판매상태",
+                "현재고수량",
+            ]
+        ]
+        .rename(
+            columns={
+                "_상품코드": "상품코드",
+                "상품명_Master": "상품명",
+                "현재고수량": "현재고",
+            }
+        )
+    )
+
+    if negative.empty:
+        st.markdown(
+            '<div class="info-card">마이너스 재고 SKU가 없습니다.</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        negative["현재고"] = negative["현재고"].map(num)
+
+        st.markdown(
+            f"""
+            <div class="danger-card">
+                마이너스 재고 SKU <strong>{len(negative):,}</strong>건
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.dataframe(
+            negative,
+            use_container_width=True,
+            hide_index=True,
+        )
 
 
 # =========================================================
 # 4. 입출고 추이
 # =========================================================
 elif page == "입출고 추이":
-    st.subheader("입출고 추이")
-    i = filter_df(inbound, selected_factory, selected_category)
-    o = filter_df(outbound, selected_factory, selected_category)
+    section("입출고 추이")
 
-    mi = monthly(i, "입고일", "입고수량", "입고")
-    mo = monthly(o, "출고일", "출고수량", "출고")
-    trend = mi.merge(mo, on="월", how="outer").fillna(0).sort_values("월")
+    inbound_f = filter_df(
+        inbound,
+        selected_factory,
+        selected_category,
+    )
+    outbound_f = filter_df(
+        outbound,
+        selected_factory,
+        selected_category,
+    )
+
+    inbound_qty = inbound_f["입고수량"].sum()
+    outbound_qty = outbound_f["출고수량"].sum()
+
+    kpi_cards(
+        [
+            ("누적 입고", num(inbound_qty), "#10B981"),
+            ("누적 출고", num(outbound_qty), "#F59E0B"),
+            (
+                "입출고 차이",
+                num(inbound_qty - outbound_qty),
+                "#2563EB",
+            ),
+        ]
+    )
+
+    monthly_inbound = monthly(
+        inbound_f,
+        "입고일",
+        "입고수량",
+        "입고",
+    )
+
+    monthly_outbound = monthly(
+        outbound_f,
+        "출고일",
+        "출고수량",
+        "출고",
+    )
+
+    trend = (
+        monthly_inbound
+        .merge(
+            monthly_outbound,
+            on="월",
+            how="outer",
+        )
+        .fillna(0)
+        .sort_values("월")
+    )
 
     if trend.empty:
         st.info("조회할 데이터가 없습니다.")
     else:
-        fig = px.line(trend, x="월", y=["입고", "출고"], markers=True, title="월별 입고 / 출고")
-        fig.update_layout(
-            height=450, margin=dict(l=20, r=20, t=60, b=20),
-            xaxis_title="월", yaxis_title="수량"
+        fig = px.line(
+            trend,
+            x="월",
+            y=["입고", "출고"],
+            markers=True,
+            title="월별 입고 / 출고",
+            color_discrete_sequence=CHART_COLORS[:2],
         )
-        st.plotly_chart(fig, use_container_width=True)
 
-        a, b = st.columns(2)
-        with a:
-            chart_bar(trend, "월", "입고", "월별 입고")
-        with b:
-            chart_bar(trend, "월", "출고", "월별 출고")
+        fig.update_layout(
+            template=PLOTLY_TEMPLATE,
+            height=450,
+            margin=dict(l=25, r=25, t=60, b=30),
+            xaxis_title="월",
+            yaxis_title="수량",
+            hovermode="x unified",
+        )
 
-        show = trend.copy()
-        show["입고"] = show["입고"].map(num)
-        show["출고"] = show["출고"].map(num)
-        st.dataframe(show, use_container_width=True, hide_index=True)
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+            config={"displayModeBar": False},
+        )
+
+        left, right = st.columns(2)
+
+        with left:
+            chart_bar(
+                trend,
+                "월",
+                "입고",
+                "월별 입고",
+            )
+
+        with right:
+            chart_bar(
+                trend,
+                "월",
+                "출고",
+                "월별 출고",
+            )
+
+        display = trend.copy()
+        display["입고"] = display["입고"].map(num)
+        display["출고"] = display["출고"].map(num)
+
+        st.dataframe(
+            display,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    section("판매채널별 출고")
 
     channel = (
-        o.groupby("판매채널", as_index=False)["출고수량"]
-        .sum().sort_values("출고수량", ascending=False)
+        outbound_f.groupby(
+            "판매채널",
+            as_index=False,
+        )["출고수량"]
+        .sum()
+        .sort_values(
+            "출고수량",
+            ascending=False,
+        )
     )
-    chart_bar(channel, "판매채널", "출고수량", "판매채널별 출고")
+
+    chart_bar(
+        channel,
+        "판매채널",
+        "출고수량",
+        "판매채널별 출고",
+    )
 
 
 # =========================================================
 # 5. 품질 현황
 # =========================================================
 elif page == "품질 현황":
-    st.subheader("품질 현황")
-    d = filter_df(defect, selected_factory, selected_category)
-    o = filter_df(outbound, selected_factory, selected_category)
+    section("품질 현황")
 
-    defect_qty = d["불량수량"].sum()
-    out_qty = o["출고수량"].sum()
-    rate = defect_qty / out_qty * 100 if out_qty else 0
-
-    cols = st.columns(3)
-    cols[0].metric("불량 수량", num(defect_qty))
-    cols[1].metric("출고 수량", num(out_qty))
-    cols[2].metric("불량률", pct(rate))
-
-    md = monthly(d, "발생일", "불량수량", "불량")
-    if not md.empty:
-        fig = px.line(md, x="월", y="불량", markers=True, title="월별 불량 추이")
-        fig.update_layout(height=430, margin=dict(l=20, r=20, t=60, b=20),
-                          xaxis_title="월", yaxis_title="불량 수량")
-        st.plotly_chart(fig, use_container_width=True)
-
-    fd = d.groupby("공장", as_index=False)["불량수량"].sum().rename(columns={"불량수량": "불량"})
-    chart_bar(fd, "공장", "불량", "공장별 불량")
-
-    dt = (
-        d.groupby("불량유형", as_index=False)["불량수량"]
-        .sum().sort_values("불량수량", ascending=False).head(15)
-        .rename(columns={"불량수량": "불량"})
+    defect_f = filter_df(
+        defect,
+        selected_factory,
+        selected_category,
     )
-    chart_bar(dt, "불량유형", "불량", "불량유형 상위 15", horizontal=True)
+    outbound_f = filter_df(
+        outbound,
+        selected_factory,
+        selected_category,
+    )
+
+    defect_qty = defect_f["불량수량"].sum()
+    outbound_qty = outbound_f["출고수량"].sum()
+
+    defect_rate = (
+        defect_qty / outbound_qty * 100
+        if outbound_qty
+        else 0
+    )
+
+    kpi_cards(
+        [
+            ("불량 수량", num(defect_qty), "#EF4444"),
+            ("출고 수량", num(outbound_qty), "#F59E0B"),
+            ("불량률", pct(defect_rate), "#8B5CF6"),
+        ]
+    )
+
+    monthly_defect = monthly(
+        defect_f,
+        "발생일",
+        "불량수량",
+        "불량",
+    )
+
+    if not monthly_defect.empty:
+        fig = px.line(
+            monthly_defect,
+            x="월",
+            y="불량",
+            markers=True,
+            title="월별 불량 추이",
+            color_discrete_sequence=["#EF4444"],
+        )
+
+        fig.update_layout(
+            template=PLOTLY_TEMPLATE,
+            height=430,
+            margin=dict(l=25, r=25, t=60, b=30),
+            xaxis_title="월",
+            yaxis_title="불량 수량",
+            hovermode="x unified",
+        )
+
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+            config={"displayModeBar": False},
+        )
+
+    left, right = st.columns(2)
+
+    with left:
+        factory_defect = (
+            defect_f.groupby(
+                "공장",
+                as_index=False,
+            )["불량수량"]
+            .sum()
+            .rename(
+                columns={"불량수량": "불량"}
+            )
+        )
+
+        chart_bar(
+            factory_defect,
+            "공장",
+            "불량",
+            "공장별 불량",
+        )
+
+    with right:
+        defect_type = (
+            defect_f.groupby(
+                "불량유형_통합",
+                as_index=False,
+            )["불량수량"]
+            .sum()
+            .rename(
+                columns={
+                    "불량유형_통합": "불량유형",
+                    "불량수량": "불량",
+                }
+            )
+            .sort_values(
+                "불량",
+                ascending=True,
+            )
+        )
+
+        chart_bar(
+            defect_type,
+            "불량유형",
+            "불량",
+            "불량유형별 불량",
+            horizontal=True,
+        )
+
+    section("불량유형별 상세")
+
+    detail = (
+        defect_f.groupby(
+            "불량유형_통합",
+            as_index=False,
+        )["불량수량"]
+        .sum()
+        .rename(
+            columns={
+                "불량유형_통합": "불량유형",
+                "불량수량": "불량수량",
+            }
+        )
+        .sort_values(
+            "불량수량",
+            ascending=False,
+        )
+    )
+
+    detail["불량수량"] = detail[
+        "불량수량"
+    ].map(num)
+
+    st.dataframe(
+        detail,
+        use_container_width=True,
+        hide_index=True,
+    )
 
 
 # =========================================================
 # 6. 데이터 품질
 # =========================================================
 elif page == "데이터 품질":
-    st.subheader("데이터 품질 점검")
+    section("데이터 품질 점검")
 
-    master_codes = set(master["_상품코드"])
+    master_codes = set(
+        master["_상품코드"]
+    )
+
     rows = []
-    for name, df in [
-        ("현재고", current), ("입고", inbound), ("출고", outbound),
-        ("불량관리", defect), ("재고스냅샷", snapshot)
+
+    for data_name, df in [
+        ("현재고", current),
+        ("입고", inbound),
+        ("출고", outbound),
+        ("불량관리", defect),
+        ("재고스냅샷", snapshot),
     ]:
-        rows.append({
-            "데이터": name,
-            "행 수": len(df),
-            "상품코드 수": df["_상품코드"].nunique(),
-            "Master 미매칭 행": int((~df["_상품코드"].isin(master_codes)).sum()),
-        })
+        rows.append(
+            {
+                "데이터": data_name,
+                "행 수": len(df),
+                "상품코드 수": df[
+                    "_상품코드"
+                ].nunique(),
+                "Master 미매칭 행": int(
+                    (
+                        ~df["_상품코드"].isin(
+                            master_codes
+                        )
+                    ).sum()
+                ),
+            }
+        )
 
-    st.markdown("### Master 상품코드 매칭")
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(
+        pd.DataFrame(rows),
+        use_container_width=True,
+        hide_index=True,
+    )
 
-    fc = (
-        master.groupby("공장")["_상품코드"].nunique()
-        .reindex(FACTORIES, fill_value=0)
+    section("공장별 SKU 분류")
+
+    factory_count = (
+        master.groupby("공장")["_상품코드"]
+        .nunique()
+        .reindex(
+            FACTORIES,
+            fill_value=0,
+        )
         .reset_index(name="SKU")
     )
-    chart_bar(fc, "공장", "SKU", "공급처상품명 기준 공장 분류")
 
-    unknown = master[master["공장"] == "미상"][
-        ["_상품코드", "상품명", "공급처상품명", "카테고리", "판매상태"]
-    ].rename(columns={"_상품코드": "상품코드"})
-
-    st.markdown("### 미상 공장 SKU")
-    if unknown.empty:
-        st.success("미상으로 분류된 SKU가 없습니다.")
-    else:
-        st.dataframe(unknown, use_container_width=True, hide_index=True)
-
-    date_rows = [
-        ["현재고", data["latest_current"]],
-        ["입고", inbound["입고일"].max()],
-        ["출고", outbound["출고일"].max()],
-        ["불량", defect["발생일"].max()],
-    ]
-    dates = pd.DataFrame(date_rows, columns=["데이터", "최신일"])
-    dates["최신일"] = dates["최신일"].apply(
-        lambda x: x.strftime("%Y-%m-%d") if pd.notna(x) else "-"
+    chart_bar(
+        factory_count,
+        "공장",
+        "SKU",
+        "공급처상품명 기준 공장 분류",
     )
 
-    st.markdown("### 데이터 기준일")
-    st.dataframe(dates, use_container_width=True, hide_index=True)
+    section("미상 공장 SKU")
+
+    unknown = master[
+        master["공장"] == "미상"
+    ][
+        [
+            "_상품코드",
+            "상품명",
+            "공급처상품명",
+            "카테고리",
+            "판매상태",
+        ]
+    ].rename(
+        columns={
+            "_상품코드": "상품코드"
+        }
+    )
+
+    if unknown.empty:
+        st.markdown(
+            '<div class="info-card">미상으로 분류된 SKU가 없습니다.</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.dataframe(
+            unknown,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    section("데이터 최신일")
+
+    latest_dates = pd.DataFrame(
+        [
+            [
+                "현재고",
+                data["latest_current"],
+            ],
+            [
+                "입고",
+                inbound["입고일"].max(),
+            ],
+            [
+                "출고",
+                outbound["출고일"].max(),
+            ],
+            [
+                "불량",
+                defect["발생일"].max(),
+            ],
+        ],
+        columns=["데이터", "최신일"],
+    )
+
+    latest_dates["최신일"] = latest_dates[
+        "최신일"
+    ].apply(
+        lambda value:
+            value.strftime("%Y-%m-%d")
+            if pd.notna(value)
+            else "-"
+    )
+
+    st.dataframe(
+        latest_dates,
+        use_container_width=True,
+        hide_index=True,
+    )
